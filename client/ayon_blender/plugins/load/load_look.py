@@ -8,8 +8,6 @@ from typing import Dict, List, Optional, Tuple
 import json
 import bpy
 from ayon_api import get_representations
-from ayon_core.pipeline.load import get_representation_path_from_context
-
 from ayon_blender.api import plugin, lib
 from ayon_blender.api.pipeline import containerise_existing
 from ayon_blender.api.constants import (
@@ -115,7 +113,7 @@ class BlendLookLoader(plugin.BlenderLoader):
         materials_repr = materials_repres[0]
         materials_context = dict(context)
         materials_context["representation"] = materials_repr
-        path = get_representation_path_from_context(materials_context)
+        path = self.filepath_from_context(materials_context)
         if not path:
             raise RuntimeError("Failed to resolve materials representation path.")
         if hasattr(path, "normalized"):
