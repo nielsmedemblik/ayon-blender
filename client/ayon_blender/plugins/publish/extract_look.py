@@ -100,9 +100,9 @@ class ExtractLook(
 
         mesh = bpy.data.meshes.new(name=f"{safe_name}_mesh")
         mesh.from_pydata(
-            points=[(0, 0, 0), (0, 1, 0), (1, 0, 0)],
-            edges=[],
-            faces=[(0, 1, 2)],
+            [(0, 0, 0), (0, 1, 0), (1, 0, 0)],
+            [],
+            [(0, 1, 2)],
         )
         temp_obj = bpy.data.objects.new(f"{safe_name}_material", mesh)
         mesh.materials.append(material)
