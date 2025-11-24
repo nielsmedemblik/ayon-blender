@@ -1,12 +1,9 @@
 import json
-import os
-import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import bpy
 import pyblish.api
-from bpy.path import abspath
 
 from ayon_core.pipeline import publish
 from ayon_core.pipeline.publish import KnownPublishError
@@ -43,32 +40,20 @@ class ExtractLook(
         resources_dir.mkdir(parents=True, exist_ok=True)
 
         exported_materials = {}
-        resource_files = set()
-        for material in materials:
-            export_info = self._export_material(material, resources_dir)
-            exported_materials[material.name_full] = export_info
-            resource_files.update(export_info["files"])
-
         manifest = []
         for assignment in assignments:
             material_name = assignment["material_name"]
             export_info = exported_materials.get(material_name)
-            if not export_info:
-                self.log.warning(
-                    "Material '%s' missing export info, skipping assignment.",
-                    material_name,
-                )
-                continue
+            if export_info is None:
+                export_info = {}
+                exported_materials[material_name] = export_info
 
             entry = {
                 "object_name": assignment["object_name"],
                 "material_name": material_name,
-                "fbx_filename": export_info["fbx_filename"],
             }
             if assignment.get("cbid"):
                 entry["cbid"] = assignment["cbid"]
-            if export_info.get("texture_filename"):
-                entry["tga_filename"] = export_info["texture_filename"]
             manifest.append(entry)
 
         folder_name = instance.data["folderEntity"]["name"]
@@ -79,10 +64,10 @@ class ExtractLook(
         with manifest_path.open("w", encoding="utf-8") as stream:
             json.dump(manifest, stream, indent=2)
 
-        files = [manifest_name]
-        files.extend(sorted(resource_files))
+        materials_filename = self._export_material_library(
+            materials, resources_dir, folder_name, product_name
+        )
 
-        # Base json representation (manifest only)
         representation = {
             "name": "json",
             "ext": "json",
@@ -91,123 +76,44 @@ class ExtractLook(
         }
         instance.data.setdefault("representations", []).append(representation)
 
-        if resource_files:
-            # Add separate representation for material resources
-            resource_repr = {
-                "name": "resources",
-                "ext": "dir",
-                "files": sorted(resource_files),
-                "stagingDir": str(stagingdir),
-            }
-            instance.data["representations"].append(resource_repr)
-
-    def _export_material(
-        self, material: bpy.types.Material, resources_dir: Path
-    ) -> Dict[str, Optional[str]]:
-        safe_name = slugify_name(material.name)
-
-        fbx_filename = self._unique_filename(resources_dir, f"{safe_name}.fbx")
-        fbx_path = resources_dir / fbx_filename
-
-        mesh = bpy.data.meshes.new(name=f"{safe_name}_mesh")
-        mesh.from_pydata(
-            [(0, 0, 0), (0, 1, 0), (1, 0, 0)],
-            [],
-            [(0, 1, 2)],
-        )
-        temp_obj = bpy.data.objects.new(f"{safe_name}_material", mesh)
-        mesh.materials.append(material)
-        bpy.context.scene.collection.objects.link(temp_obj)
-
-        with lib.maintained_selection():
-            plugin.deselect_all()
-            temp_obj.select_set(True)
-            bpy.context.view_layer.objects.active = temp_obj
-            override = plugin.create_blender_context(
-                active=temp_obj, selected=[temp_obj]
-            )
-            with bpy.context.temp_override(**override):
-                bpy.ops.export_scene.fbx(
-                    filepath=str(fbx_path),
-                    use_selection=True,
-                    object_types={'MESH'},
-                    use_active_collection=False,
-                    add_leaf_bones=False,
-                    bake_anim=False,
-                    apply_unit_scale=True,
-                    apply_scale_options='FBX_SCALE_UNITS',
-                )
-
-        bpy.context.scene.collection.objects.unlink(temp_obj)
-        bpy.data.objects.remove(temp_obj)
-        bpy.data.meshes.remove(mesh)
-
-        texture_filename = self._export_material_texture(
-            material, resources_dir, safe_name
-        )
-
-        files = [os.path.join("resources", fbx_filename)]
-        if texture_filename:
-            files.append(os.path.join("resources", texture_filename))
-
-        return {
-            "fbx_filename": fbx_filename,
-            "texture_filename": texture_filename,
-            "files": files,
+        resources_repr = {
+            "name": "materials",
+            "ext": "blend",
+            "files": materials_filename,
+            "stagingDir": str(stagingdir),
         }
+        instance.data["representations"].append(resources_repr)
 
-    def _unique_filename(self, directory: Path, filename: str) -> str:
-        name = Path(filename).stem
-        suffix = Path(filename).suffix or ""
-        candidate = filename
-        index = 1
-        while (directory / candidate).exists():
-            candidate = f"{name}_{index:02d}{suffix}"
-            index += 1
-        return candidate
+    def _export_material_library(
+        self,
+        materials: List[bpy.types.Material],
+        staging_dir: Path,
+        folder_name: str,
+        product_name: str,
+    ) -> str:
+        safe_name = slugify_name(f"{folder_name}_{product_name}_materials")
+        blend_filename = f"{safe_name}.blend"
+        blend_path = staging_dir / blend_filename
 
-    def _export_material_texture(
-        self, material: bpy.types.Material, resources_dir: Path, safe_name: str
-    ) -> Optional[str]:
-        image = self._get_base_color_image(material)
-        if image is None:
-            return None
+        data_blocks: set = set(materials)
+        data_blocks.update(self._collect_material_images(materials))
 
-        src_path = Path(abspath(image.filepath)) if image.filepath else None
-        extension = (
-            src_path.suffix if src_path and src_path.suffix else ".png"
-        )
-        texture_filename = self._unique_filename(
-            resources_dir, f"{safe_name}{extension}"
-        )
-        destination = resources_dir / texture_filename
+        bpy.data.libraries.write(str(blend_path), data_blocks, compress=False)
+        return blend_filename
 
-        if image.packed_file or not src_path or not src_path.exists():
-            image.filepath_raw = str(destination)
-            image.save_render(filepath=str(destination))
-        else:
-            shutil.copy2(src_path, destination)
-
-        return texture_filename
-
-    def _get_base_color_image(
-        self, material: bpy.types.Material
-    ) -> Optional[bpy.types.Image]:
-        if not material.use_nodes:
-            return None
-        tree = material.node_tree
-        if not tree:
-            return None
-        principled = next(
-            (node for node in tree.nodes if node.type == 'BSDF_PRINCIPLED'),
-            None,
-        )
-        if not principled:
-            return None
-        color_input = principled.inputs.get("Base Color")
-        if not color_input or not color_input.links:
-            return None
-        image_node = color_input.links[0].from_node
-        if image_node.bl_idname != 'ShaderNodeTexImage':
-            return None
-        return image_node.image
+    def _collect_material_images(
+        self, materials: List[bpy.types.Material]
+    ) -> set[bpy.types.Image]:
+        images = set()
+        for material in materials:
+            if not material or not material.use_nodes:
+                continue
+            tree = material.node_tree
+            if not tree:
+                continue
+            for node in tree.nodes:
+                if node.bl_idname != 'ShaderNodeTexImage':
+                    continue
+                if node.image:
+                    images.add(node.image)
+        return images
