@@ -55,11 +55,14 @@ class FbxModelLoader(plugin.BlenderLoader):
         # bpy.ops.import_scene.fbx to be the default import command
         # in 5.0
         if blender_version >= (4, 5, 0):
-            bpy.ops.wm.fbx_import(filepath=libpath)
+            bpy.ops.wm.fbx_import(filepath=libpath, use_custom_props=True)
         else:
             # TODO: make sure it works with the color management
             # in 4.4 or elder version
-            bpy.ops.import_scene.fbx(filepath=libpath)
+            bpy.ops.import_scene.fbx(
+                filepath=libpath,
+                use_custom_props=True,
+            )
 
         parent = bpy.context.scene.collection
 

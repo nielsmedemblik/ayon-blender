@@ -94,6 +94,12 @@ class CacheModelLoader(plugin.BlenderLoader):
 
         relative = bpy.context.preferences.filepaths.use_relative_paths
 
+        set_custom_props_kwarg = {}
+        # Older Blender versions may not support `set_custom_props`. We set it
+        # optimistically and fall back gracefully if the import call rejects it.
+        if lib.get_blender_version() >= (3, 0, 0):
+            set_custom_props_kwarg["set_custom_props"] = True
+
         if any(libpath.lower().endswith(ext)
                for ext in [".usd", ".usda", ".usdc"]):
             # USD
@@ -106,10 +112,17 @@ class CacheModelLoader(plugin.BlenderLoader):
             bpy.ops.wm.obj_import(filepath=libpath)
         else:
             # Alembic
-            bpy.ops.wm.alembic_import(
-                filepath=libpath,
-                relative_path=relative
-            )
+            alembic_kwargs = {
+                "filepath": libpath,
+                "relative_path": relative,
+            }
+            alembic_kwargs.update(set_custom_props_kwarg)
+            try:
+                bpy.ops.wm.alembic_import(**alembic_kwargs)
+            except TypeError:
+                # Fallback for Blender builds without `set_custom_props`.
+                alembic_kwargs.pop("set_custom_props", None)
+                bpy.ops.wm.alembic_import(**alembic_kwargs)
 
         objects = lib.get_selection()
 

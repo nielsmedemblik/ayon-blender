@@ -614,18 +614,6 @@ def strip_container_data(containers):
 
 
 @contextlib.contextmanager
-def strip_instance_data(node):
-    """Remove instance data during context
-    """
-    previous_data = dict(node.get(AYON_PROPERTY, {}))
-    try:
-        node[AYON_PROPERTY]["active"] = False
-        yield
-    finally:
-        node[AYON_PROPERTY] = previous_data
-
-
-@contextlib.contextmanager
 def strip_namespace(containers):
     """Strip namespace during context
     This context manager is only valid for blender version elder than 5.0.
@@ -644,7 +632,7 @@ def strip_namespace(containers):
             children = node.children_recursive
         elif isinstance(node, bpy.types.Object):
             children = node.children
-        elif isinstance(node, (bpy.types.Node, bpy.types.Action)):
+        elif isinstance(node, bpy.types.Node):
             children = [node]
         else:
             raise TypeError(f"Unsupported type: {node} ({type(node)})")
@@ -662,44 +650,6 @@ def strip_namespace(containers):
     finally:
         for node, original_namespace in original_namespaces.items():
             node.name = f"{original_namespace}:{name}"
-
-
-@contextlib.contextmanager
-def packed_images(datablocks):
-    """Unpack packed images during context
-    This will pack all unpacked images found in the given datablocks,
-    and unpack them back when exiting the context.
-
-    Args:
-        datablocks (set): Datablocks to search for
-            unpacked images.
-
-    """
-    unpacked_node_images = set()
-    for data in datablocks:
-        if not (
-            isinstance(data, bpy.types.Object) and data.type == 'MESH'
-        ):
-            continue
-        for material_slot in data.material_slots:
-            mat = material_slot.material
-            if not (mat and mat.use_nodes):
-                continue
-            tree = mat.node_tree
-            if tree.type != 'SHADER':
-                continue
-            for node in tree.nodes:
-                if node.bl_idname != 'ShaderNodeTexImage':
-                    continue
-                if node.image and node.image.packed_file is None:
-                    unpacked_node_images.add(node.image)
-                    node.image.pack()
-    try:
-        yield
-
-    finally:
-        for image in unpacked_node_images:
-            image.unpack()
 
 
 def search_replace_render_paths(src: str, dest: str) -> bool:
@@ -746,28 +696,3 @@ def search_replace_render_paths(src: str, dest: str) -> bool:
             changes = True
 
     return changes
-
-
-def map_colorspace_name(colorspace: str) -> str:
-    """
-    Map ACES or other colorspace names to Blender's expected colorspace names.
-
-    Args:
-        colorspace: The original colorspace name
-
-    Returns:
-        str: The mapped colorspace name that Blender expects
-    """
-    colorspace_mapping = {
-        "ACES - ACEScg": "ACEScg",
-        "ACES - ACES2065-1": "ACES2065-1",
-        "ACES - sRGB": "sRGB",
-        "ACES - Rec.709": "Linear Rec.709",
-        "ACES - Rec.2020": "Linear Rec.2020",
-        "Linear": "Linear Rec.709",
-        "sRGB": "sRGB",
-        "Rec.709": "Rec.1886",
-        "Rec.2020": "Rec.2020",
-    }
-
-    return colorspace_mapping.get(colorspace, colorspace)

@@ -11,7 +11,8 @@ from ayon_core.pipeline.load import LoadError
 from ayon_blender.api import plugin
 from ayon_blender.api.pipeline import (
     containerise_existing,
-    metadata_update
+    metadata_update,
+    show_message
 )
 from ayon_blender.api.constants import AYON_PROPERTY
 
@@ -99,6 +100,9 @@ class BlendActionLoader(plugin.BlenderLoader):
         metadata_update(container, container_metadata)
         bpy.ops.object.select_all(action='DESELECT')
         self[:] = [empty_obj]
+
+        # show message dialog to notify the users the action is loaded
+        show_message("Action loaded", f"Action {container.name} loaded successfully.")
 
         return container
 

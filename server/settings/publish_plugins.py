@@ -122,6 +122,11 @@ class PublishPluginsModel(BaseSettingsModel):
         title="Validate No Colons In Name",
         description="Checks for invalid naming format containing `:` within name - mostly when exporting to Unreal Engine.",
     )
+    ValidateLookHasCbId: ValidatePluginModel = SettingsField(
+        default_factory=ValidatePluginModel,
+        title="Validate Look cbId",
+        description="Ensures every mesh in a look instance carries a cbId attribute.",
+    )
     ValidateRenderCameraIsSet: ValidatePluginModel = SettingsField(
         default_factory=ValidatePluginModel,
         title="Validate Render Camera Is Set",
@@ -174,6 +179,10 @@ class PublishPluginsModel(BaseSettingsModel):
     ExtractLayout: ValidatePluginModel = SettingsField(
         default_factory=ValidatePluginModel,
         title="Extract Layout (JSON)"
+    )
+    ExtractLook: ValidatePluginModel = SettingsField(
+        default_factory=ValidatePluginModel,
+        title="Extract Look"
     )
     ExtractThumbnail: ExtractPlayblastModel = SettingsField(
         default_factory=ExtractPlayblastModel,
@@ -245,6 +254,11 @@ DEFAULT_BLENDER_PUBLISH_SETTINGS = {
         "optional": True,
         "active": True
     },
+    "ValidateLookHasCbId": {
+        "enabled": True,
+        "optional": False,
+        "active": True
+    },
     "ValidateInstanceEmpty": {
         "enabled": True,
         "optional": False,
@@ -309,6 +323,11 @@ DEFAULT_BLENDER_PUBLISH_SETTINGS = {
         "enabled": True,
         "optional": True,
         "active": False
+    },
+    "ExtractLook": {
+        "enabled": True,
+        "optional": False,
+        "active": True
     },
     "ExtractThumbnail": {
         "enabled": True,

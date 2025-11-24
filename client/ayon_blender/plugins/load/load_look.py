@@ -1,19 +1,22 @@
 """Load a model asset in Blender."""
 
+from collections import defaultdict
 from pathlib import Path
 from pprint import pformat
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-import os
 import json
 import bpy
+from ayon_api import get_representations
+from ayon_core.pipeline.load import get_representation_path_from_context
 
-from ayon_blender.api import plugin
+from ayon_blender.api import plugin, lib
 from ayon_blender.api.pipeline import containerise_existing
 from ayon_blender.api.constants import (
     AYON_PROPERTY,
     VALID_EXTENSIONS,
 )
+from ayon_blender.api.look import get_cbid_from_node
 
 
 class BlendLookLoader(plugin.BlenderLoader):
@@ -38,47 +41,142 @@ class BlendLookLoader(plugin.BlenderLoader):
 
         return children
 
-    def _process(self, libpath, container_name, objects):
-        with open(libpath, "r") as fp:
+    def _process(self, libpath, container_name, objects, context):
+        with open(libpath, "r", encoding="utf-8") as fp:
             data = json.load(fp)
 
-        path = os.path.dirname(libpath)
-        materials_path = f"{path}/resources"
+        materials_path = self._get_materials_library_path(context)
+        material_lookup, imported_materials = self._load_material_library(
+            materials_path, container_name
+        )
 
-        materials = []
+        target_meshes = self._gather_target_meshes(objects)
+        cbid_to_meshes = defaultdict(list)
+        name_to_meshes = defaultdict(list)
+        for mesh in target_meshes:
+            cbid = get_cbid_from_node(mesh)
+            if cbid:
+                cbid_to_meshes[cbid].append(mesh)
+            base_name = mesh.name.split(':')[0]
+            name_to_meshes[base_name].append(mesh)
 
         for entry in data:
-            file = entry.get('fbx_filename')
-            if file is None:
+            material_name = entry.get("material_name")
+            material = material_lookup.get(material_name)
+            if not material:
+                self.log.warning(
+                    "Material '%s' missing from library, skipping.", material_name
+                )
                 continue
 
-            bpy.ops.import_scene.fbx(filepath=f"{materials_path}/{file}")
+            assigned = False
+            cbid = entry.get("cbid")
+            if cbid:
+                assigned = self._assign_material(
+                    cbid_to_meshes.get(str(cbid), []), material
+                )
 
-            mesh = [o for o in bpy.context.scene.objects if o.select_get()][0]
-            material = mesh.data.materials[0]
-            material.name = f"{material.name}:{container_name}"
+            if not assigned:
+                target_name = entry.get("object_name") or entry.get("material_name")
+                if target_name:
+                    base = target_name.split(':')[0]
+                    assigned = self._assign_material(
+                        name_to_meshes.get(base, []), material
+                    )
 
-            texture_file = entry.get('tga_filename')
-            if texture_file:
-                node_tree = material.node_tree
-                pbsdf = node_tree.nodes['Principled BSDF']
-                base_color = pbsdf.inputs[0]
-                tex_node = base_color.links[0].from_node
-                tex_node.image.filepath = f"{materials_path}/{texture_file}"
+            if not assigned:
+                fallback_name = material.name.split(':')[0]
+                self._assign_material(
+                    name_to_meshes.get(fallback_name, []), material
+                )
 
-            materials.append(material)
+        return imported_materials, objects
 
-            for obj in objects:
-                for child in self.get_all_children(obj):
-                    mesh_name = child.name.split(':')[0]
-                    if mesh_name == material.name.split(':')[0]:
-                        child.data.materials.clear()
-                        child.data.materials.append(material)
-                        break
+    def _get_materials_library_path(self, context: dict) -> str:
+        version_id = context["representation"]["versionId"]
+        project_name = context["project"]["name"]
+        materials_repres = get_representations(
+            project_name,
+            representation_names={"materials"},
+            version_ids={version_id},
+            fields={
+                "id",
+                "name",
+                "parentId",
+                "context",
+                "files",
+                "attrib",
+                "data",
+                "versionId",
+            },
+        )
+        if not materials_repres:
+            raise RuntimeError("Look materials representation not found.")
+        materials_repr = materials_repres[0]
+        materials_context = dict(context)
+        materials_context["representation"] = materials_repr
+        path = get_representation_path_from_context(materials_context)
+        if not path:
+            raise RuntimeError("Failed to resolve materials representation path.")
+        if hasattr(path, "normalized"):
+            path = path.normalized()
+        return str(path)
 
-            bpy.data.objects.remove(mesh)
+    def _load_material_library(
+        self, materials_path: str, container_name: str
+    ) -> Tuple[Dict[str, bpy.types.Material], List[bpy.types.Material]]:
+        material_lookup: Dict[str, bpy.types.Material] = {}
+        imported_materials: List[bpy.types.Material] = []
+        with bpy.data.libraries.load(materials_path, link=False, relative=False) as (
+            data_from,
+            data_to,
+        ):
+            data_to.materials = data_from.materials
+            data_to.images = data_from.images
 
-        return materials, objects
+        for material in data_to.materials:
+            if material is None:
+                continue
+            original_name = material.name
+            material_lookup[original_name] = material
+            material.name = f"{original_name}:{container_name}"
+            imported_materials.append(material)
+        return material_lookup, imported_materials
+
+    def _assign_material(
+        self, meshes: Optional[List[bpy.types.Object]], material: bpy.types.Material
+    ) -> bool:
+        if not meshes:
+            return False
+
+        assigned = False
+        for mesh in meshes:
+            if not isinstance(mesh, bpy.types.Object) or mesh.type != 'MESH':
+                continue
+            mesh.data.materials.clear()
+            mesh.data.materials.append(material)
+            assigned = True
+        return assigned
+
+    def _gather_target_meshes(self, objects: List[bpy.types.Object]) -> List[bpy.types.Object]:
+        meshes = []
+        seen = set()
+        for obj in objects:
+            if not isinstance(obj, bpy.types.Object):
+                continue
+            for candidate in self._iter_object_and_children(obj):
+                if candidate.type != 'MESH':
+                    continue
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                meshes.append(candidate)
+        return meshes
+
+    def _iter_object_and_children(self, obj: bpy.types.Object):
+        yield obj
+        for child in obj.children_recursive:
+            yield child
 
     def process_asset(
         self, context: dict, name: str, namespace: Optional[str] = None,
@@ -124,7 +222,9 @@ class BlendLookLoader(plugin.BlenderLoader):
 
         selected = [o for o in bpy.context.scene.objects if o.select_get()]
 
-        materials, objects = self._process(libpath, container_name, selected)
+        materials, objects = self._process(
+            libpath, container_name, selected, context
+        )
 
         # Save the list of imported materials in the metadata container
         metadata["objects"] = objects
@@ -198,7 +298,8 @@ class BlendLookLoader(plugin.BlenderLoader):
         container_name = f"{namespace}_{name}"
 
         materials, objects = self._process(
-            libpath, container_name, collection_metadata['objects'])
+            libpath, container_name, collection_metadata['objects'], context
+        )
 
         collection_metadata["objects"] = objects
         collection_metadata["materials"] = materials

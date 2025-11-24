@@ -71,6 +71,10 @@ class CreatorsModel(BaseSettingsModel):
         default_factory=BasicCreatorModel,
         title="Create Review"
     )
+    CreateLook: BasicCreatorModel = SettingsField(
+        default_factory=BasicCreatorModel,
+        title="Create Look"
+    )
     CreateRig: BasicCreatorModel = SettingsField(
         default_factory=BasicCreatorModel,
         title="Create Rig"
@@ -91,6 +95,7 @@ DEFAULT_CREATORS_SETTINGS = {
     "CreatePointcache": {"default_variants": ["Main"], "enabled": True},
     "CreateRender": {"default_variants": ["Main"], "enabled": True},
     "CreateReview": {"default_variants": ["Main"], "enabled": True},
+    "CreateLook": {"default_variants": ["Main"], "enabled": True},
     "CreateRig": {"default_variants": ["Main"], "enabled": True},
     "CreateUSD": {"default_variants": ["Main"], "enabled": True},
 }
