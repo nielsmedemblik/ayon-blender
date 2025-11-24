@@ -355,6 +355,14 @@ class LaunchLibrary(LaunchQtApp):
     _tool_name = "libraryloader"
 
 
+class LaunchLookAssigner(LaunchQtApp):
+    """Launch AYON Look Assigner."""
+
+    bl_idname = "wm.ayon_look_assigner"
+    bl_label = "Look Assigner..."
+    _tool_name = "lookassigner"
+
+
 class LaunchWorkFiles(LaunchQtApp):
     """Launch AYON Work Files."""
 
@@ -478,6 +486,7 @@ class TOPBAR_MT_ayon(bpy.types.Menu):
         )
         layout.operator(LaunchManager.bl_idname, text="Manage...")
         layout.operator(LaunchLibrary.bl_idname, text="Library...")
+        layout.operator(LaunchLookAssigner.bl_idname, text="Look Assigner...")
         layout.separator()
         layout.operator(SetFrameRange.bl_idname, text="Set Frame Range")
         layout.operator(SetResolution.bl_idname, text="Set Resolution")
@@ -499,6 +508,7 @@ classes = [
     LaunchPublisher,
     LaunchManager,
     LaunchLibrary,
+    LaunchLookAssigner,
     LaunchWorkFiles,
     SetFrameRange,
     SetResolution,
