@@ -1,5 +1,6 @@
 """Load a model asset in Blender."""
 
+from collections import defaultdict
 from pathlib import Path
 from pprint import pformat
 from typing import Dict, List, Optional
@@ -8,12 +9,13 @@ import os
 import json
 import bpy
 
-from ayon_blender.api import plugin
+from ayon_blender.api import plugin, lib
 from ayon_blender.api.pipeline import containerise_existing
 from ayon_blender.api.constants import (
     AYON_PROPERTY,
     VALID_EXTENSIONS,
 )
+from ayon_blender.api.look import get_cbid_from_node
 
 
 class BlendLookLoader(plugin.BlenderLoader):
@@ -39,46 +41,166 @@ class BlendLookLoader(plugin.BlenderLoader):
         return children
 
     def _process(self, libpath, container_name, objects):
-        with open(libpath, "r") as fp:
+        with open(libpath, "r", encoding="utf-8") as fp:
             data = json.load(fp)
 
-        path = os.path.dirname(libpath)
-        materials_path = f"{path}/resources"
+        base_path = os.path.dirname(libpath)
+        materials_path = os.path.join(base_path, "resources")
 
-        materials = []
+        target_meshes = self._gather_target_meshes(objects)
+        cbid_to_meshes = defaultdict(list)
+        name_to_meshes = defaultdict(list)
+        for mesh in target_meshes:
+            cbid = get_cbid_from_node(mesh)
+            if cbid:
+                cbid_to_meshes[cbid].append(mesh)
+            base_name = mesh.name.split(':')[0]
+            name_to_meshes[base_name].append(mesh)
+
+        material_cache = {}
+        imported_materials = []
 
         for entry in data:
-            file = entry.get('fbx_filename')
-            if file is None:
+            material = self._material_from_entry(
+                entry, materials_path, container_name, material_cache, imported_materials
+            )
+            if material is None:
                 continue
 
-            bpy.ops.import_scene.fbx(filepath=f"{materials_path}/{file}")
+            assigned = False
+            cbid = entry.get("cbid")
+            if cbid:
+                assigned = self._assign_material(
+                    cbid_to_meshes.get(str(cbid), []), material
+                )
 
-            mesh = [o for o in bpy.context.scene.objects if o.select_get()][0]
+            if not assigned:
+                target_name = entry.get("object_name") or entry.get("material_name")
+                if target_name:
+                    base = target_name.split(':')[0]
+                    assigned = self._assign_material(
+                        name_to_meshes.get(base, []), material
+                    )
+
+            if not assigned:
+                fallback_name = material.name.split(':')[0]
+                self._assign_material(
+                    name_to_meshes.get(fallback_name, []), material
+                )
+
+        return imported_materials, objects
+
+    def _material_from_entry(
+        self,
+        entry: Dict,
+        materials_path: str,
+        container_name: str,
+        cache: Dict[str, bpy.types.Material],
+        imported_materials: List[bpy.types.Material],
+    ) -> Optional[bpy.types.Material]:
+        fbx_filename = entry.get("fbx_filename")
+        if not fbx_filename:
+            self.log.warning("Look entry missing fbx filename: %s", entry)
+            return None
+
+        material = cache.get(fbx_filename)
+        if material is None:
+            fbx_path = os.path.join(materials_path, fbx_filename)
+            if not os.path.exists(fbx_path):
+                self.log.error("Look resource not found: %s", fbx_path)
+                return None
+            material = self._import_material(fbx_path, container_name)
+            cache[fbx_filename] = material
+            imported_materials.append(material)
+
+        texture_file = entry.get("tga_filename")
+        if texture_file:
+            texture_path = os.path.join(materials_path, texture_file)
+            self._assign_texture(material, texture_path)
+
+        return material
+
+    def _import_material(
+        self,
+        filepath: str,
+        container_name: str,
+    ) -> bpy.types.Material:
+        with lib.maintained_selection():
+            plugin.deselect_all()
+            bpy.ops.import_scene.fbx(filepath=filepath)
+            imported_meshes = [
+                obj for obj in bpy.context.selected_objects
+                if obj.type == 'MESH'
+            ]
+            if not imported_meshes:
+                raise RuntimeError(f"FBX import did not create a mesh: {filepath}")
+            mesh = imported_meshes[0]
+            if not mesh.data.materials:
+                raise RuntimeError(
+                    f"No materials found in imported mesh from {filepath}"
+                )
             material = mesh.data.materials[0]
-            material.name = f"{material.name}:{container_name}"
-
-            texture_file = entry.get('tga_filename')
-            if texture_file:
-                node_tree = material.node_tree
-                pbsdf = node_tree.nodes['Principled BSDF']
-                base_color = pbsdf.inputs[0]
-                tex_node = base_color.links[0].from_node
-                tex_node.image.filepath = f"{materials_path}/{texture_file}"
-
-            materials.append(material)
-
-            for obj in objects:
-                for child in self.get_all_children(obj):
-                    mesh_name = child.name.split(':')[0]
-                    if mesh_name == material.name.split(':')[0]:
-                        child.data.materials.clear()
-                        child.data.materials.append(material)
-                        break
-
+            base_name = material.name.split(':')[0]
+            material.name = f"{base_name}:{container_name}"
             bpy.data.objects.remove(mesh)
+        return material
 
-        return materials, objects
+    def _assign_texture(self, material: bpy.types.Material, texture_path: str):
+        if not os.path.exists(texture_path):
+            self.log.warning("Look texture missing: %s", texture_path)
+            return
+
+        if not material.use_nodes or material.node_tree is None:
+            return
+
+        node_tree = material.node_tree
+        principled = node_tree.nodes.get('Principled BSDF')
+        if not principled:
+            return
+        base_color = principled.inputs.get("Base Color")
+        if not base_color or not base_color.links:
+            return
+        tex_node = base_color.links[0].from_node
+        if tex_node.bl_idname != 'ShaderNodeTexImage' or tex_node.image is None:
+            return
+
+        tex_node.image.filepath = texture_path
+        tex_node.image.reload()
+
+    def _assign_material(
+        self, meshes: Optional[List[bpy.types.Object]], material: bpy.types.Material
+    ) -> bool:
+        if not meshes:
+            return False
+
+        assigned = False
+        for mesh in meshes:
+            if not isinstance(mesh, bpy.types.Object) or mesh.type != 'MESH':
+                continue
+            mesh.data.materials.clear()
+            mesh.data.materials.append(material)
+            assigned = True
+        return assigned
+
+    def _gather_target_meshes(self, objects: List[bpy.types.Object]) -> List[bpy.types.Object]:
+        meshes = []
+        seen = set()
+        for obj in objects:
+            if not isinstance(obj, bpy.types.Object):
+                continue
+            for candidate in self._iter_object_and_children(obj):
+                if candidate.type != 'MESH':
+                    continue
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                meshes.append(candidate)
+        return meshes
+
+    def _iter_object_and_children(self, obj: bpy.types.Object):
+        yield obj
+        for child in obj.children_recursive:
+            yield child
 
     def process_asset(
         self, context: dict, name: str, namespace: Optional[str] = None,
