@@ -36,8 +36,6 @@ class ExtractLook(
             )
 
         stagingdir = Path(self.staging_dir(instance))
-        resources_dir = stagingdir / "resources"
-        resources_dir.mkdir(parents=True, exist_ok=True)
 
         exported_materials = {}
         manifest = []
@@ -65,7 +63,7 @@ class ExtractLook(
             json.dump(manifest, stream, indent=2)
 
         materials_filename = self._export_material_library(
-            materials, resources_dir, folder_name, product_name
+            materials, stagingdir, folder_name, product_name
         )
 
         representation = {
