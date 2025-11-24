@@ -48,13 +48,21 @@ class CacheDataLoader(plugin.BlenderLoader):
         relative = bpy.context.preferences.filepaths.use_relative_paths
 
         before_cachefiles = set(bpy.data.cache_files)
-        bpy.ops.wm.alembic_import(
-            filepath=filepath,
-            relative_path=relative,
-            # Always add constraint and cache reader, even if not animated, so
-            # updates propagate when the cache changes.
-            always_add_cache_reader=True,
-        )
+        alembic_kwargs = {
+            "filepath": filepath,
+            "relative_path": relative,
+            # Always add constraint and cache reader, even if not animated,
+            # so updates propagate when the cache changes.
+            "always_add_cache_reader": True,
+        }
+        # Blender exposes `set_custom_props` on newer versions. Try it and
+        # gracefully ignore when unsupported.
+        alembic_kwargs["set_custom_props"] = True
+        try:
+            bpy.ops.wm.alembic_import(**alembic_kwargs)
+        except TypeError:
+            alembic_kwargs.pop("set_custom_props", None)
+            bpy.ops.wm.alembic_import(**alembic_kwargs)
         cachefile = next(
             cache for cache in bpy.data.cache_files if cache not in before_cachefiles
         )
