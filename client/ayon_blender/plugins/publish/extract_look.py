@@ -82,13 +82,24 @@ class ExtractLook(
         files = [manifest_name]
         files.extend(sorted(resource_files))
 
+        # Base json representation (manifest only)
         representation = {
             "name": "json",
             "ext": "json",
-            "files": files,
+            "files": manifest_name,
             "stagingDir": str(stagingdir),
         }
         instance.data.setdefault("representations", []).append(representation)
+
+        if resource_files:
+            # Add separate representation for material resources
+            resource_repr = {
+                "name": "resources",
+                "ext": "dir",
+                "files": sorted(resource_files),
+                "stagingDir": str(stagingdir),
+            }
+            instance.data["representations"].append(resource_repr)
 
     def _export_material(
         self, material: bpy.types.Material, resources_dir: Path
