@@ -1,4 +1,3 @@
-import contextlib
 import os
 
 import bpy
@@ -6,10 +5,8 @@ import bpy
 from ayon_core.pipeline import publish
 from ayon_blender.api import plugin
 from ayon_blender.api.pipeline import ls
-from ayon_blender.api.lib import (
-    strip_container_data,
-    strip_instance_data
-)
+from ayon_blender.api.lib import strip_container_data
+
 
 
 class ExtractBlendAnimation(
@@ -62,10 +59,8 @@ class ExtractBlendAnimation(
             data_blocks.add(obj)
 
         containers = list(ls())
-        asset_group = instance.data["transientData"]["instance_node"]
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(strip_container_data(containers))
-            stack.enter_context(strip_instance_data(asset_group))
+
+        with strip_container_data(containers):
             self.log.debug(f"Data blocks to be written: {data_blocks}")
             bpy.data.libraries.write(filepath, data_blocks, compress=self.compress)
 

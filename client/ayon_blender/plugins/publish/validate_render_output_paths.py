@@ -92,10 +92,7 @@ class ValidateSceneRenderFilePath(
     order = ValidateContentsOrder
     families = ["render"]
     hosts = ["blender"]
-    label = "Validate Scene Output"
-    optional_tooltip = (
-        "Validate whether the scene-wide render filepath is set as required."
-    )
+    label = "Validate Scene Render Filepath"
     optional = True
     actions = [RepairAction]
 
@@ -195,11 +192,7 @@ class ValidateCompositorNodeFileOutputPaths(
     order = ValidateContentsOrder
     families = ["render"]
     hosts = ["blender"]
-    label = "Validate Output Paths"
-    optional_tooltip = (
-        "Validate whether Compositor Node Output File nodes "
-        "have correct filepaths set."
-    )
+    label = "Validate Compositor Node File Output Paths"
     optional = True
     actions = [RepairAction]
 
