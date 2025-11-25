@@ -378,7 +378,11 @@ class LookAssignerController:
         return look_entries
 
     def apply_look(self, asset: SceneAsset, look: LookEntry) -> Dict:
-        meshes = asset.mesh_members()
+        meshes = [
+            mesh
+            for mesh in asset.mesh_members()
+            if mesh is not None and mesh.as_pointer()
+        ]
         if not meshes:
             raise RuntimeError(
                 f"No mesh objects found for asset '{asset.display_name}'."
