@@ -100,7 +100,6 @@ class BlendLookLoader(plugin.BlenderLoader):
             fields={
                 "id",
                 "name",
-                "parentId",
                 "context",
                 "files",
                 "attrib",
