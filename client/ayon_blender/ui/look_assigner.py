@@ -618,7 +618,39 @@ def get_look_assigner_window() -> LookAssignerWindow:
     return _LOOK_ASSIGNER_WINDOW
 
 
-def _apply_ayon_style(widget: QtWidgets.QWidget) -> None:
+_DEFAULT_QSS = """
+QWidget {
+    background-color: #2b2b2b;
+    color: #f0f0f0;
+    font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+    font-size: 12px;
+}
+QLineEdit, QListWidget, QTextEdit, QPlainTextEdit, QTreeView, QTableView {
+    background-color: #3a3a3a;
+    border: 1px solid #4a4a4a;
+    border-radius: 2px;
+    padding: 4px;
+}
+QPushButton {
+    background-color: #444;
+    border: 1px solid #5a5a5a;
+    padding: 6px 12px;
+    border-radius: 2px;
+}
+QPushButton:hover {
+    background-color: #555;
+}
+QPushButton:pressed {
+    background-color: #666;
+}
+QSplitter::handle {
+    background-color: #4a4a4a;
+    width: 2px;
+}
+"""
+
+
+def _apply_ayon_style(widget: QtWidgets.QWidget) -> bool:
     """Apply AYON's Qt styling when available."""
 
     def _call_style(func):
@@ -648,32 +680,64 @@ def _apply_ayon_style(widget: QtWidgets.QWidget) -> None:
         except Exception:
             return False
 
-    style_sources = (
-        ("ayon_core.style", ("apply_style", "apply_ayon_style", "apply_stylesheet")),
-        (
-            "ayon_core.tools.utils.host_tools",
-            (
-                "apply_style",
-                "apply_stylesheet",
-                "apply_qt_style",
-            ),
-        ),
-    )
-    for module_name, attr_names in style_sources:
+    def _try_from_module(module_name, attr_names, stylesheet_attrs=()):
         try:
             module = importlib.import_module(module_name)
         except Exception:
-            continue
+            return False
         for attr in attr_names:
             func = getattr(module, attr, None)
             if callable(func) and _call_style(func):
-                return
-        stylesheet_getter = getattr(module, "get_stylesheet", None)
-        if callable(stylesheet_getter):
-            try:
-                stylesheet = stylesheet_getter()
-            except Exception:
-                stylesheet = None
-            if stylesheet:
-                widget.setStyleSheet(stylesheet)
-                return
+                return True
+        for attr in stylesheet_attrs:
+            getter = getattr(module, attr, None)
+            if callable(getter):
+                try:
+                    stylesheet = getter()
+                except Exception:
+                    stylesheet = None
+                if stylesheet:
+                    widget.setStyleSheet(stylesheet)
+                    return True
+        return False
+
+    style_sources = (
+        (
+            "ayon_core.tools.utils.host_tools",
+            ("apply_style", "apply_stylesheet", "apply_qt_style"),
+            ("get_stylesheet", "get_qt_stylesheet"),
+        ),
+        (
+            "ayon_core.style",
+            ("apply_style", "apply_ayon_style", "apply_stylesheet"),
+            ("get_stylesheet",),
+        ),
+    )
+
+    for module_name, func_names, sheet_names in style_sources:
+        if _try_from_module(module_name, func_names, sheet_names):
+            return True
+
+    app = QtWidgets.QApplication.instance()
+    if app:
+        app_stylesheet = app.styleSheet()
+        if app_stylesheet:
+            widget.setStyleSheet(app_stylesheet)
+            return True
+
+    resource_paths = (
+        ":/ayon/style/style.qss",
+        ":/style/style.qss",
+        ":/ayon/resources/styles/dark.qss",
+    )
+    for path in resource_paths:
+        file = QtCore.QFile(path)
+        if file.exists() and file.open(QtCore.QIODevice.ReadOnly):
+            data = bytes(file.readAll()).decode("utf-8")
+            file.close()
+            if data:
+                widget.setStyleSheet(data)
+                return True
+
+    widget.setStyleSheet(_DEFAULT_QSS)
+    return False
