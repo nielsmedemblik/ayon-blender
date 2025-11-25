@@ -415,10 +415,13 @@ class LookAssignerController:
         if not hasattr(node, "keys"):
             return
         data = node.get(AYON_PROPERTY)
-        if data is None:
-            node[AYON_PROPERTY] = {}
-            data = node.get(AYON_PROPERTY)
-        look_info = data.setdefault(LOOK_ASSIGNER_KEY, {})
+        if data is None or not isinstance(data, dict):
+            data = {}
+            node[AYON_PROPERTY] = data
+        look_info = data.get(LOOK_ASSIGNER_KEY)
+        if not isinstance(look_info, dict):
+            look_info = {}
+            data[LOOK_ASSIGNER_KEY] = look_info
         look_info.clear()
         look_info.update({
             "productId": look.product.get("id"),
