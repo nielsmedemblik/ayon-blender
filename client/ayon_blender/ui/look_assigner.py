@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 import traceback
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 import bpy
 from qtpy import QtCore, QtWidgets
@@ -14,7 +15,7 @@ from ayon_api import (
     get_representations,
     get_versions,
 )
-from ayon_core.pipeline import get_current_project_name
+from ayon_core.pipeline import get_current_project_name, remove_container
 from ayon_core.pipeline.load import get_representation_path_from_context
 
 from ayon_blender.api import pipeline
@@ -77,6 +78,8 @@ class SceneAsset:
     representation: Dict
     folder: Dict
     product: Dict
+    folder_id: Optional[str]
+    product_id: Optional[str]
 
     def mesh_members(self) -> List[bpy.types.Object]:
         return _collect_mesh_members(self.node)
@@ -86,39 +89,18 @@ class SceneAsset:
         return self.container.get("namespace") or ""
 
     @property
-    def folder_id(self) -> Optional[str]:
-        return self.folder.get("id")
-
-    @property
     def folder_name(self) -> str:
-        return self.folder.get("name") or self.folder.get("path", "")
+        return self.folder.get("name") or self.folder.get("path", "") or (
+            self.folder_id or ""
+        )
 
     @property
     def product_name(self) -> str:
-        return self.product.get("name") or self.container.get("name", "")
-
-    def matches_filter(self, text: str) -> bool:
-        haystack = " ".join(
-            filter(
-                None,
-                [
-                    self.display_name.lower(),
-                    self.folder_name.lower(),
-                    self.product_name.lower(),
-                    self.namespace.lower(),
-                ],
-            )
+        return (
+            self.product.get("name")
+            or self.container.get("name", "")
+            or (self.product_id or "")
         )
-        return text.lower() in haystack
-
-    def intersects_selection(self, selected: Iterable[bpy.types.Object]) -> bool:
-        selected_set = set(selected)
-        if not selected_set:
-            return False
-        for member in self.mesh_members():
-            if member in selected_set:
-                return True
-        return False
 
 
 @dataclass
@@ -128,17 +110,28 @@ class LookEntry:
     product: Dict
     version: Dict
     manifest_representation: Dict
-    materials_representation: Dict
+    library_representation: Dict
 
     def label(self) -> str:
+        product_name = self.product.get("name") or "Look"
+        variant = (self.product.get("attrib") or {}).get("variant")
+        version_label = self.version.get("name") or ""
         version_number = self.version.get("version")
-        version_suffix = f" v{int(version_number):03d}" if version_number else ""
-        return f"{self.product.get('name')}:{self.version.get('name')}{version_suffix}"
+        parts = [product_name]
+        if variant:
+            parts.append(f"({variant})")
+        if version_label:
+            parts.append(version_label)
+        if version_number is not None:
+            parts.append(f"v{int(version_number):03d}")
+        return " ".join(filter(None, parts))
 
     def build_context(self, project_name: str) -> Dict:
-        version_context = self.manifest_representation.get("context") or {}
-        folder_ctx = version_context.get("folder") or {}
-        product_ctx = version_context.get("product") or self.product
+        representation_context = self.manifest_representation.get("context") or {}
+        folder_ctx = representation_context.get("folder") or {}
+        product_ctx = representation_context.get("product") or self.product
+        if not folder_ctx and self.version.get("folderId"):
+            folder_ctx = {"id": self.version["folderId"]}
         return {
             "project": {"name": project_name},
             "folder": folder_ctx,
@@ -155,7 +148,6 @@ class LookAssignerController:
         self.project_name = get_current_project_name()
         self._assets: List[SceneAsset] = []
         self._look_cache: Dict[str, List[LookEntry]] = {}
-        self._representation_cache: Dict[str, Dict] = {}
         self._loader = BlendLookLoader()
 
     @property
@@ -163,7 +155,12 @@ class LookAssignerController:
         return self._assets
 
     def refresh_assets(self) -> Sequence[SceneAsset]:
-        containers = list(pipeline.ls())
+        self._look_cache.clear()
+        containers = [
+            container
+            for container in pipeline.ls()
+            if container.get("loader") != BlendLookLoader.__name__
+        ]
         rep_ids = {
             container.get("representation")
             for container in containers
@@ -179,25 +176,89 @@ class LookAssignerController:
                 "attrib",
                 "data",
             }
-            reps = list(
+            representations = list(
                 get_representations(
                     self.project_name,
                     representation_ids=rep_ids,
                     fields=rep_fields,
                 )
             )
-            rep_map = {rep["id"]: rep for rep in reps}
+            rep_map = {rep["id"]: rep for rep in representations}
+
+        version_ids = {
+            rep.get("versionId")
+            for rep in rep_map.values()
+            if rep.get("versionId")
+        }
+        version_map: Dict[str, Dict] = {}
+        if version_ids:
+            version_fields = {
+                "id",
+                "name",
+                "productId",
+                "folderId",
+                "version",
+                "attrib",
+                "data",
+            }
+            versions = list(
+                get_versions(
+                    self.project_name,
+                    version_ids=version_ids,
+                    fields=version_fields,
+                )
+            )
+            version_map = {version["id"]: version for version in versions}
+
+        product_ids = {
+            version.get("productId")
+            for version in version_map.values()
+            if version.get("productId")
+        }
+        product_map: Dict[str, Dict] = {}
+        if product_ids:
+            product_fields = {
+                "id",
+                "name",
+                "folderId",
+                "productType",
+                "attrib",
+            }
+            products = list(
+                get_products(
+                    self.project_name,
+                    product_ids=product_ids,
+                    fields=product_fields,
+                )
+            )
+            product_map = {product["id"]: product for product in products}
+
         assets: List[SceneAsset] = []
         for container in containers:
-            if container.get("loader") == BlendLookLoader.__name__:
-                continue
-            rep_id = container.get("representation")
-            rep_entity = rep_map.get(rep_id)
+            rep_entity = rep_map.get(container.get("representation"))
             if not rep_entity:
                 continue
+            version_entity = version_map.get(rep_entity.get("versionId", ""))
+            product_entity = (
+                product_map.get(version_entity.get("productId"))
+                if version_entity
+                else None
+            )
             context = rep_entity.get("context") or {}
-            folder = context.get("folder") or {}
-            product = context.get("product") or {}
+            folder_ctx = dict(context.get("folder") or {})
+            product_ctx = dict(context.get("product") or {})
+            folder_id = version_entity.get("folderId") if version_entity else None
+            product_id = (
+                version_entity.get("productId") if version_entity else None
+            )
+            if folder_id and "id" not in folder_ctx:
+                folder_ctx["id"] = folder_id
+            if product_entity:
+                product_ctx.setdefault("name", product_entity.get("name"))
+                product_ctx.setdefault("attrib", product_entity.get("attrib"))
+            if product_id and "id" not in product_ctx:
+                product_ctx["id"] = product_id
+
             node = container.get("node")
             if not isinstance(node, (bpy.types.Object, bpy.types.Collection)):
                 continue
@@ -210,8 +271,10 @@ class LookAssignerController:
                     container=container,
                     node=node,
                     representation=rep_entity,
-                    folder=folder,
-                    product=product,
+                    folder=folder_ctx,
+                    product=product_ctx,
+                    folder_id=folder_id,
+                    product_id=product_id,
                 )
             )
         self._assets = assets
@@ -243,13 +306,13 @@ class LookAssignerController:
                 get_versions(
                     self.project_name,
                     product_ids={product["id"]},
-                    latest=True,
                     hero=True,
                     standard=True,
                     fields={
                         "id",
                         "name",
                         "productId",
+                        "folderId",
                         "version",
                         "attrib",
                         "data",
@@ -263,7 +326,7 @@ class LookAssignerController:
                 get_representations(
                     self.project_name,
                     version_ids=version_ids,
-                    representation_names={"json", "materials"},
+                    representation_names={"json", "blend", "materials"},
                     fields={
                         "id",
                         "name",
@@ -285,18 +348,26 @@ class LookAssignerController:
                 if not repr_pair:
                     continue
                 manifest = repr_pair.get("json")
-                materials = repr_pair.get("materials")
-                if not manifest or not materials:
+                library = (
+                    repr_pair.get("blend")
+                    or repr_pair.get("materials")
+                )
+                if not manifest or not library:
                     continue
                 look_entries.append(
                     LookEntry(
                         product=product,
                         version=version,
                         manifest_representation=manifest,
-                        materials_representation=materials,
+                        library_representation=library,
                     )
                 )
-        look_entries.sort(key=lambda item: item.version.get("version") or 0, reverse=True)
+        look_entries.sort(
+            key=lambda item: (
+                (item.product.get("name") or "").lower(),
+                -(item.version.get("version") or 0),
+            )
+        )
         self._look_cache[folder_id] = look_entries
         return look_entries
 
@@ -350,8 +421,22 @@ class LookAssignerController:
             ],
         })
 
+    def unassign_unused_looks(self) -> Dict[str, Union[List[str], int]]:
+        removed_containers = 0
+        for container in pipeline.ls():
+            if container.get("loader") != BlendLookLoader.__name__:
+                continue
+            try:
+                remove_container(container)
+                removed_containers += 1
+            except Exception:
+                traceback.print_exc()
+        cleanup = self._cleanup_unused_materials()
+        cleanup["containers"] = removed_containers
+        return cleanup
+
     @staticmethod
-    def remove_unused_materials() -> Dict[str, List[str]]:
+    def _cleanup_unused_materials() -> Dict[str, List[str]]:
         removed_materials: List[str] = []
         removed_images: List[str] = []
         for material in list(bpy.data.materials):
@@ -376,30 +461,19 @@ class LookAssignerWindow(QtWidgets.QDialog):
         self.setWindowTitle("AYON Look Assigner")
         self.resize(960, 540)
         self.controller = LookAssignerController()
-        self._selection_only = False
-
         self._build_ui()
+        _apply_ayon_style(self)
         self.refresh_assets()
 
     # ---- UI construction -------------------------------------------------
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
         toolbar = QtWidgets.QHBoxLayout()
-        self.search_field = QtWidgets.QLineEdit()
-        self.search_field.setPlaceholderText("Search assets...")
-        self.search_field.textChanged.connect(self._apply_filters)
-
-        self.selection_button = QtWidgets.QToolButton()
-        self.selection_button.setText("Selected Only")
-        self.selection_button.setCheckable(True)
-        self.selection_button.toggled.connect(self._on_selection_toggle)
-
         self.refresh_button = QtWidgets.QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh_assets)
 
-        toolbar.addWidget(self.search_field)
-        toolbar.addWidget(self.selection_button)
         toolbar.addWidget(self.refresh_button)
+        toolbar.addStretch(1)
 
         layout.addLayout(toolbar)
 
@@ -427,11 +501,11 @@ class LookAssignerWindow(QtWidgets.QDialog):
         self.assign_button.clicked.connect(self.assign_selected_look)
         self.assign_button.setEnabled(False)
 
-        self.remove_unused_button = QtWidgets.QPushButton("Remove Unused Looks")
-        self.remove_unused_button.clicked.connect(self._remove_unused_materials)
+        self.unassign_button = QtWidgets.QPushButton("Unassign Looks")
+        self.unassign_button.clicked.connect(self._unassign_looks)
 
         footer_buttons.addWidget(self.assign_button)
-        footer_buttons.addWidget(self.remove_unused_button)
+        footer_buttons.addWidget(self.unassign_button)
 
         footer.addLayout(footer_buttons)
         footer.addWidget(self.info_label, stretch=1)
@@ -454,19 +528,7 @@ class LookAssignerWindow(QtWidgets.QDialog):
 
     def _populate_asset_list(self):
         self.asset_list.clear()
-        filter_text = self.search_field.text().strip().lower()
-        selection = None
-        if self._selection_only:
-            selection = [
-                obj
-                for obj in bpy.context.scene.objects
-                if obj.select_get()
-            ]
         for asset in self.controller.assets:
-            if filter_text and not asset.matches_filter(filter_text):
-                continue
-            if selection and not asset.intersects_selection(selection):
-                continue
             item = QtWidgets.QListWidgetItem(self._format_asset_label(asset))
             item.setData(QtCore.Qt.UserRole, asset)
             self.asset_list.addItem(item)
@@ -482,13 +544,6 @@ class LookAssignerWindow(QtWidgets.QDialog):
         if asset.namespace:
             parts.append(f"({asset.namespace})")
         return " ".join(parts)
-
-    def _apply_filters(self):
-        self._populate_asset_list()
-
-    def _on_selection_toggle(self, state: bool):
-        self._selection_only = state
-        self._populate_asset_list()
 
     def _on_asset_selection_changed(self, current, _previous):
         self.look_list.clear()
@@ -540,13 +595,14 @@ class LookAssignerWindow(QtWidgets.QDialog):
             f"({len(result['materials'])} materials)."
         )
 
-    def _remove_unused_materials(self):
-        result = self.controller.remove_unused_materials()
-        removed_mats = len(result["materials"])
-        removed_images = len(result["images"])
+    def _unassign_looks(self):
+        result = self.controller.unassign_unused_looks()
+        removed_containers = result.get("containers", 0)
+        removed_mats = len(result.get("materials", []))
+        removed_images = len(result.get("images", []))
         self._update_status(
-            f"Removed {removed_mats} material(s) and "
-            f"{removed_images} image(s) with no users."
+            f"Removed {removed_containers} look container(s), "
+            f"{removed_mats} material(s) and {removed_images} image(s)."
         )
 
     def _update_status(self, message: str):
@@ -561,3 +617,35 @@ def get_look_assigner_window() -> LookAssignerWindow:
     if _LOOK_ASSIGNER_WINDOW is None:
         _LOOK_ASSIGNER_WINDOW = LookAssignerWindow()
     return _LOOK_ASSIGNER_WINDOW
+
+
+def _apply_ayon_style(widget: QtWidgets.QWidget) -> None:
+    """Apply AYON's Qt styling when available."""
+
+    style_sources = (
+        ("ayon_core.style", ("apply_style", "apply_ayon_style", "apply_stylesheet")),
+        (
+            "ayon_core.tools.utils.host_tools",
+            ("apply_style", "apply_stylesheet", "apply_qt_style"),
+        ),
+    )
+    for module_name, attr_names in style_sources:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        for attr in attr_names:
+            func = getattr(module, attr, None)
+            if callable(func):
+                try:
+                    func(widget)
+                    return
+                except Exception:
+                    continue
+        stylesheet_getter = getattr(module, "get_stylesheet", None)
+        if callable(stylesheet_getter):
+            try:
+                widget.setStyleSheet(stylesheet_getter())
+                return
+            except Exception:
+                continue

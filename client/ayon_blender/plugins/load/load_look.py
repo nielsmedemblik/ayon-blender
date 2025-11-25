@@ -95,7 +95,7 @@ class BlendLookLoader(plugin.BlenderLoader):
         project_name = context["project"]["name"]
         materials_repres = list(get_representations(
             project_name,
-            representation_names={"materials"},
+            representation_names={"blend", "materials"},
             version_ids={version_id},
             fields={
                 "id",
@@ -109,7 +109,10 @@ class BlendLookLoader(plugin.BlenderLoader):
         ))
         if not materials_repres:
             raise RuntimeError("Look materials representation not found.")
-        materials_repr = materials_repres[0]
+        materials_repr = next(
+            (rep for rep in materials_repres if rep.get("name") == "blend"),
+            materials_repres[0],
+        )
         materials_context = dict(context)
         materials_context["representation"] = materials_repr
         path = self.filepath_from_context(materials_context)

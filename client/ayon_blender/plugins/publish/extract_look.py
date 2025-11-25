@@ -75,7 +75,7 @@ class ExtractLook(
         instance.data.setdefault("representations", []).append(representation)
 
         resources_repr = {
-            "name": "materials",
+            "name": "blend",
             "ext": "blend",
             "files": materials_filename,
             "stagingDir": str(stagingdir),
