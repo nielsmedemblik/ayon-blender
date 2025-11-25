@@ -361,29 +361,12 @@ class LaunchLookAssigner(LaunchQtApp):
     bl_idname = "wm.ayon_look_assigner"
     bl_label = "Look Assigner..."
     _tool_name = None
-    _tool_name_variants = (
-        "lookassigner",
-        "look_assigner",
-    )
 
     def execute(self, context):
-        window = BlenderApplication.get_window(self.bl_idname)
-        if window is None:
-            for tool_name in self._tool_name_variants:
-                try:
-                    window = host_tools.get_tool_by_name(tool_name)
-                except Exception:
-                    window = None
-                if window:
-                    BlenderApplication.store_window(self.bl_idname, window)
-                    break
-        if window is None:
-            self.report(
-                {'ERROR'},
-                "Look Assigner is not available in this AYON installation. "
-                "Please ensure the tool is installed in AYON Launcher."
-            )
-            return {'CANCELLED'}
+        from ayon_blender.ui.look_assigner import get_look_assigner_window
+
+        window = get_look_assigner_window()
+        BlenderApplication.store_window(self.bl_idname, window)
         self._window = window
         return super().execute(context)
 
