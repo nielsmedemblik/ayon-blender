@@ -20,6 +20,7 @@ from ayon_core.pipeline import get_current_project_name, remove_container
 from ayon_core.pipeline.load import get_representation_path_from_context
 
 from ayon_blender.api import pipeline
+from ayon_blender.api import lib as blender_lib
 from ayon_blender.api.constants import AYON_PROPERTY
 from ayon_blender.plugins.load.load_look import BlendLookLoader
 
@@ -391,19 +392,50 @@ class LookAssignerController:
         libpath = get_representation_path_from_context(context)
         if hasattr(libpath, "normalized"):
             libpath = libpath.normalized()
-        container_name = f"{asset.display_name}_look"
-        imported_materials, _ = self._loader._process(
-            str(libpath),
-            container_name,
-            meshes,
-            context,
-        )
+        nodes = []
+        with blender_lib.maintained_selection():
+            self._select_objects(meshes)
+            nodes = self._loader._load(
+                context,
+                name=None,
+                namespace=None,
+                options=None,
+            )
+        imported_materials = self._extract_container_materials(nodes)
         self._store_current_look(asset, look, imported_materials)
         return {
             "materials": [mat.name for mat in imported_materials if mat],
             "asset": asset.display_name,
             "look": look.label(),
         }
+
+    def _select_objects(self, objects: Sequence[bpy.types.Object]) -> None:
+        for obj in bpy.context.scene.objects:
+            obj.select_set(False)
+        active = None
+        for obj in objects:
+            obj.select_set(True)
+            if active is None:
+                active = obj
+        if active:
+            bpy.context.view_layer.objects.active = active
+
+    @staticmethod
+    def _extract_container_materials(nodes: Optional[Sequence]) -> List[bpy.types.Material]:
+        materials: List[bpy.types.Material] = []
+        if not nodes:
+            return materials
+        for node in nodes:
+            if not isinstance(node, bpy.types.Collection):
+                continue
+            metadata = node.get(AYON_PROPERTY)
+            if not metadata:
+                continue
+            mats = metadata.get("materials")
+            if mats:
+                materials = list(mats)
+                break
+        return materials
 
     def _store_current_look(
         self,
