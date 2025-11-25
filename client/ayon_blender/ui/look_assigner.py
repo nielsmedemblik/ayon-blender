@@ -23,6 +23,13 @@ from ayon_blender.api import pipeline
 from ayon_blender.api.constants import AYON_PROPERTY
 from ayon_blender.plugins.load.load_look import BlendLookLoader
 
+try:
+    from ayon_core.style import load_stylesheet as ayon_load_stylesheet
+    from ayon_core.resources import get_ayon_icon_filepath
+except ImportError:
+    ayon_load_stylesheet = None
+    get_ayon_icon_filepath = None
+
 
 LOOK_ASSIGNER_KEY = "lookAssigner"
 
@@ -652,6 +659,13 @@ QSplitter::handle {
 
 def _apply_ayon_style(widget: QtWidgets.QWidget) -> bool:
     """Apply AYON's Qt styling when available."""
+
+    if ayon_load_stylesheet:
+        try:
+            widget.setStyleSheet(ayon_load_stylesheet())
+            return True
+        except Exception:
+            pass
 
     def _call_style(func):
         try:
