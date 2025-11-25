@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import traceback
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Union
@@ -130,8 +131,6 @@ class LookEntry:
         representation_context = self.manifest_representation.get("context") or {}
         folder_ctx = representation_context.get("folder") or {}
         product_ctx = representation_context.get("product") or self.product
-        if not folder_ctx and self.version.get("folderId"):
-            folder_ctx = {"id": self.version["folderId"]}
         return {
             "project": {"name": project_name},
             "folder": folder_ctx,
@@ -196,7 +195,6 @@ class LookAssignerController:
                 "id",
                 "name",
                 "productId",
-                "folderId",
                 "version",
                 "attrib",
                 "data",
@@ -247,10 +245,12 @@ class LookAssignerController:
             context = rep_entity.get("context") or {}
             folder_ctx = dict(context.get("folder") or {})
             product_ctx = dict(context.get("product") or {})
-            folder_id = version_entity.get("folderId") if version_entity else None
+            folder_id = folder_ctx.get("id")
             product_id = (
                 version_entity.get("productId") if version_entity else None
             )
+            if not folder_id and product_entity:
+                folder_id = product_entity.get("folderId")
             if folder_id and "id" not in folder_ctx:
                 folder_ctx["id"] = folder_id
             if product_entity:
@@ -312,7 +312,6 @@ class LookAssignerController:
                         "id",
                         "name",
                         "productId",
-                        "folderId",
                         "version",
                         "attrib",
                         "data",
@@ -622,11 +621,42 @@ def get_look_assigner_window() -> LookAssignerWindow:
 def _apply_ayon_style(widget: QtWidgets.QWidget) -> None:
     """Apply AYON's Qt styling when available."""
 
+    def _call_style(func):
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            signature = None
+
+        if signature:
+            params = signature.parameters
+            if len(params) == 0:
+                func()
+                return True
+            if len(params) == 1:
+                func(widget)
+                return True
+
+        try:
+            func(widget)
+            return True
+        except TypeError:
+            try:
+                func()
+                return True
+            except Exception:
+                return False
+        except Exception:
+            return False
+
     style_sources = (
         ("ayon_core.style", ("apply_style", "apply_ayon_style", "apply_stylesheet")),
         (
             "ayon_core.tools.utils.host_tools",
-            ("apply_style", "apply_stylesheet", "apply_qt_style"),
+            (
+                "apply_style",
+                "apply_stylesheet",
+                "apply_qt_style",
+            ),
         ),
     )
     for module_name, attr_names in style_sources:
@@ -636,16 +666,14 @@ def _apply_ayon_style(widget: QtWidgets.QWidget) -> None:
             continue
         for attr in attr_names:
             func = getattr(module, attr, None)
-            if callable(func):
-                try:
-                    func(widget)
-                    return
-                except Exception:
-                    continue
+            if callable(func) and _call_style(func):
+                return
         stylesheet_getter = getattr(module, "get_stylesheet", None)
         if callable(stylesheet_getter):
             try:
-                widget.setStyleSheet(stylesheet_getter())
-                return
+                stylesheet = stylesheet_getter()
             except Exception:
-                continue
+                stylesheet = None
+            if stylesheet:
+                widget.setStyleSheet(stylesheet)
+                return
